@@ -1,0 +1,377 @@
+--- a/common/tls/reality_client.go
++++ b/common/tls/reality_client.go
+@@ -108,6 +108,14 @@
+ 	e.uClient.SetNextProtos(nextProto)
+ }
+ 
++func (e *RealityClientConfig) HandshakeTimeout() time.Duration {
++	return e.uClient.HandshakeTimeout()
++}
++
++func (e *RealityClientConfig) SetHandshakeTimeout(timeout time.Duration) {
++	e.uClient.SetHandshakeTimeout(timeout)
++}
++
+ func (e *RealityClientConfig) STDConfig() (*STDConfig, error) {
+ 	return nil, E.New("unsupported usage for reality")
+ }
+--- a/common/tls/reality_server.go
++++ b/common/tls/reality_server.go
+@@ -23,7 +23,8 @@
+ var _ ServerConfigCompat = (*RealityServerConfig)(nil)
+ 
+ type RealityServerConfig struct {
+-	config *reality.Config
++	handshakeTimeout time.Duration
++	config           *reality.Config
+ }
+ 
+ func NewRealityServer(ctx context.Context, logger log.Logger, options option.InboundTLSOptions) (*RealityServerConfig, error) {
+@@ -113,7 +114,15 @@
+ 		return handshakeDialer.DialContext(ctx, network, M.ParseSocksaddr(addr))
+ 	}
+ 
+-	return &RealityServerConfig{&tlsConfig}, nil
++	return &RealityServerConfig{config: &tlsConfig}, nil
++}
++
++func (c *RealityServerConfig) HandshakeTimeout() time.Duration {
++	return c.handshakeTimeout
++}
++
++func (c *RealityServerConfig) SetHandshakeTimeout(timeout time.Duration) {
++	c.handshakeTimeout = timeout
+ }
+ 
+ func (c *RealityServerConfig) ServerName() string {
+@@ -167,7 +176,8 @@
+ 
+ func (c *RealityServerConfig) Clone() Config {
+ 	return &RealityServerConfig{
+-		config: c.config.Clone(),
++		handshakeTimeout: c.handshakeTimeout,
++		config:           c.config.Clone(),
+ 	}
+ }
+ 
+--- a/common/tls/std_client.go
++++ b/common/tls/std_client.go
+@@ -22,6 +22,7 @@
+ )
+ 
+ type STDClientConfig struct {
++	handshakeTimeout      time.Duration
+ 	ctx                   context.Context
+ 	config                *tls.Config
+ 	fragment              bool
+@@ -29,6 +30,14 @@
+ 	recordFragment        bool
+ }
+ 
++func (c *STDClientConfig) HandshakeTimeout() time.Duration {
++	return c.handshakeTimeout
++}
++
++func (c *STDClientConfig) SetHandshakeTimeout(timeout time.Duration) {
++	c.handshakeTimeout = timeout
++}
++
+ func (c *STDClientConfig) ServerName() string {
+ 	return c.config.ServerName
+ }
+@@ -58,6 +67,7 @@
+ 
+ func (c *STDClientConfig) Clone() Config {
+ 	return &STDClientConfig{
++		handshakeTimeout:      c.handshakeTimeout,
+ 		ctx:                   c.ctx,
+ 		config:                c.config.Clone(),
+ 		fragment:              c.fragment,
+@@ -198,7 +208,7 @@
+ 	} else if len(clientCertificate) > 0 || len(clientKey) > 0 {
+ 		return nil, E.New("client certificate and client key must be provided together")
+ 	}
+-	var config Config = &STDClientConfig{ctx, &tlsConfig, options.Fragment, time.Duration(options.FragmentFallbackDelay), options.RecordFragment}
++	var config Config = &STDClientConfig{0, ctx, &tlsConfig, options.Fragment, time.Duration(options.FragmentFallbackDelay), options.RecordFragment}
+ 	if options.ECH != nil && options.ECH.Enabled {
+ 		var err error
+ 		config, err = parseECHClientConfig(ctx, config.(ECHCapableConfig), options)
+--- a/common/tls/std_server.go
++++ b/common/tls/std_server.go
+@@ -23,6 +23,7 @@
+ var errInsecureUnused = E.New("tls: insecure unused")
+ 
+ type STDServerConfig struct {
++	handshakeTimeout      time.Duration
+ 	access                sync.RWMutex
+ 	config                *tls.Config
+ 	logger                log.Logger
+@@ -36,6 +37,14 @@
+ 	watcher               *fswatch.Watcher
+ }
+ 
++func (c *STDServerConfig) HandshakeTimeout() time.Duration {
++	return c.handshakeTimeout
++}
++
++func (c *STDServerConfig) SetHandshakeTimeout(timeout time.Duration) {
++	c.handshakeTimeout = timeout
++}
++
+ func (c *STDServerConfig) ServerName() string {
+ 	c.access.RLock()
+ 	defer c.access.RUnlock()
+@@ -86,7 +95,8 @@
+ 
+ func (c *STDServerConfig) Clone() Config {
+ 	return &STDServerConfig{
+-		config: c.config.Clone(),
++		handshakeTimeout: c.handshakeTimeout,
++		config:           c.config.Clone(),
+ 	}
+ }
+ 
+--- a/common/tls/utls_client.go
++++ b/common/tls/utls_client.go
+@@ -26,6 +26,7 @@
+ )
+ 
+ type UTLSClientConfig struct {
++	handshakeTimeout      time.Duration
+ 	ctx                   context.Context
+ 	config                *utls.Config
+ 	id                    utls.ClientHelloID
+@@ -34,6 +35,14 @@
+ 	recordFragment        bool
+ }
+ 
++func (c *UTLSClientConfig) HandshakeTimeout() time.Duration {
++	return c.handshakeTimeout
++}
++
++func (c *UTLSClientConfig) SetHandshakeTimeout(timeout time.Duration) {
++	c.handshakeTimeout = timeout
++}
++
+ func (c *UTLSClientConfig) ServerName() string {
+ 	return c.config.ServerName
+ }
+@@ -70,7 +79,7 @@
+ 
+ func (c *UTLSClientConfig) Clone() Config {
+ 	return &UTLSClientConfig{
+-		c.ctx, c.config.Clone(), c.id, c.fragment, c.fragmentFallbackDelay, c.recordFragment,
++		c.handshakeTimeout, c.ctx, c.config.Clone(), c.id, c.fragment, c.fragmentFallbackDelay, c.recordFragment,
+ 	}
+ }
+ 
+@@ -255,7 +264,7 @@
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	var config Config = &UTLSClientConfig{ctx, &tlsConfig, id, options.Fragment, time.Duration(options.FragmentFallbackDelay), options.RecordFragment}
++	var config Config = &UTLSClientConfig{0, ctx, &tlsConfig, id, options.Fragment, time.Duration(options.FragmentFallbackDelay), options.RecordFragment}
+ 	if options.ECH != nil && options.ECH.Enabled {
+ 		if options.Reality != nil && options.Reality.Enabled {
+ 			return nil, E.New("Reality is conflict with ECH")
+--- a/dns/client.go
++++ b/dns/client.go
+@@ -40,9 +40,9 @@
+ 	rdrc               adapter.RDRCStore
+ 	initRDRCFunc       func() adapter.RDRCStore
+ 	logger             logger.ContextLogger
+-	cache              freelru.Cache[dns.Question, *dns.Msg]
++	cache              *freelru.Cache[dns.Question, *dns.Msg]
+ 	cacheLock          compatible.Map[dns.Question, chan struct{}]
+-	transportCache     freelru.Cache[transportCacheKey, *dns.Msg]
++	transportCache     *freelru.Cache[transportCacheKey, *dns.Msg]
+ 	transportCacheLock compatible.Map[dns.Question, chan struct{}]
+ }
+ 
+@@ -76,9 +76,9 @@
+ 	}
+ 	if !client.disableCache {
+ 		if !client.independentCache {
+-			client.cache = common.Must1(freelru.NewSharded[dns.Question, *dns.Msg](cacheCapacity, maphash.NewHasher[dns.Question]().Hash32))
++			client.cache = common.Must1(freelru.New[dns.Question, *dns.Msg](cacheCapacity, maphash.NewHasher[dns.Question]().Hash32, true))
+ 		} else {
+-			client.transportCache = common.Must1(freelru.NewSharded[transportCacheKey, *dns.Msg](cacheCapacity, maphash.NewHasher[transportCacheKey]().Hash32))
++			client.transportCache = common.Must1(freelru.New[transportCacheKey, *dns.Msg](cacheCapacity, maphash.NewHasher[transportCacheKey]().Hash32, true))
+ 		}
+ 	}
+ 	return client
+--- a/dns/router.go
++++ b/dns/router.go
+@@ -37,7 +37,7 @@
+ 	client                adapter.DNSClient
+ 	rules                 []adapter.DNSRule
+ 	defaultDomainStrategy C.DomainStrategy
+-	dnsReverseMapping     freelru.Cache[netip.Addr, string]
++	dnsReverseMapping     *freelru.Cache[netip.Addr, string]
+ 	platformInterface     platform.Interface
+ }
+ 
+@@ -69,7 +69,7 @@
+ 		Logger: router.logger,
+ 	})
+ 	if options.ReverseMapping {
+-		router.dnsReverseMapping = common.Must1(freelru.NewSharded[netip.Addr, string](1024, maphash.NewHasher[netip.Addr]().Hash32))
++		router.dnsReverseMapping = common.Must1(freelru.New[netip.Addr, string](1024, maphash.NewHasher[netip.Addr]().Hash32, true))
+ 	}
+ 	return router
+ }
+--- a/protocol/mixed/inbound.go
++++ b/protocol/mixed/inbound.go
+@@ -116,7 +116,7 @@
+ 	}
+ 	switch headerBytes[0] {
+ 	case socks4.Version, socks5.Version:
+-		return socks.HandleConnectionEx(ctx, conn, reader, h.authenticator, adapter.NewUpstreamHandlerEx(metadata, h.newUserConnection, h.streamUserPacketConnection), h.listener, metadata.Source, onClose)
++		return socks.HandleConnectionEx(ctx, conn, reader, h.authenticator, adapter.NewUpstreamHandlerEx(metadata, h.newUserConnection, h.streamUserPacketConnection), h.listener, 0, metadata.Source, onClose)
+ 	default:
+ 		return http.HandleConnectionEx(ctx, conn, reader, h.authenticator, adapter.NewUpstreamHandlerEx(metadata, h.newUserConnection, h.streamUserPacketConnection), metadata.Source, onClose)
+ 	}
+--- a/protocol/socks/inbound.go
++++ b/protocol/socks/inbound.go
+@@ -62,7 +62,7 @@
+ }
+ 
+ func (h *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
+-	err := socks.HandleConnectionEx(ctx, conn, std_bufio.NewReader(conn), h.authenticator, adapter.NewUpstreamHandlerEx(metadata, h.newUserConnection, h.streamUserPacketConnection), h.listener, metadata.Source, onClose)
++	err := socks.HandleConnectionEx(ctx, conn, std_bufio.NewReader(conn), h.authenticator, adapter.NewUpstreamHandlerEx(metadata, h.newUserConnection, h.streamUserPacketConnection), h.listener, 0, metadata.Source, onClose)
+ 	N.CloseOnHandshakeFailure(conn, onClose, err)
+ 	if err != nil {
+ 		if E.IsClosedOrCanceled(err) {
+--- a/protocol/tor/proxy.go
++++ b/protocol/tor/proxy.go
+@@ -99,7 +99,7 @@
+ }
+ 
+ func (l *ProxyListener) accept(ctx context.Context, conn *net.TCPConn) error {
+-	return socks.HandleConnectionEx(ctx, conn, std_bufio.NewReader(conn), l.authenticator, l, nil, M.SocksaddrFromNet(conn.RemoteAddr()), nil)
++	return socks.HandleConnectionEx(ctx, conn, std_bufio.NewReader(conn), l.authenticator, l, nil, 0, M.SocksaddrFromNet(conn.RemoteAddr()), nil)
+ }
+ 
+ func (l *ProxyListener) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+--- a/transport/v2rayhttp/client.go
++++ b/transport/v2rayhttp/client.go
+@@ -48,13 +48,19 @@
+ 			tlsConfig.SetNextProtos([]string{http2.NextProtoTLS})
+ 		}
+ 		tlsDialer := tls.NewDialer(dialer, tlsConfig)
+-		transport = &http2.Transport{
++		h2Transport := &forceCloseTransport{}
++		h2Transport.Transport = &http2.Transport{
+ 			ReadIdleTimeout: time.Duration(options.IdleTimeout),
+ 			PingTimeout:     time.Duration(options.PingTimeout),
+ 			DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.STDConfig) (net.Conn, error) {
+-				return tlsDialer.DialTLSContext(ctx, M.ParseSocksaddr(addr))
++				conn, err := tlsDialer.DialTLSContext(ctx, M.ParseSocksaddr(addr))
++				if err != nil {
++					return nil, err
++				}
++				return h2Transport.track(conn), nil
+ 			},
+ 		}
++		transport = h2Transport
+ 	}
+ 	if options.Method == "" {
+ 		options.Method = http.MethodPut
+--- a/transport/v2rayhttp/force_close.go
++++ b/transport/v2rayhttp/force_close.go
+@@ -1,25 +1,62 @@
+ package v2rayhttp
+ 
+ import (
++	"crypto/tls"
++	"net"
+ 	"net/http"
+ 	"reflect"
+ 	"sync"
+-	"unsafe"
+ 
+ 	E "github.com/sagernet/sing/common/exceptions"
+-
+ 	"golang.org/x/net/http2"
+ )
+ 
+-type clientConnPool struct {
+-	t     *http2.Transport
+-	mu    sync.Mutex
+-	conns map[string][]*http2.ClientConn // key is host:port
++// Track owned connections instead of inspecting http2's private pool layout.
++// Go 1.27 delegates http2.Transport to net/http and removes that private pool.
++type forceCloseTransport struct {
++	*http2.Transport
++	access      sync.Mutex
++	connections map[*trackedHTTP2Conn]struct{}
+ }
+ 
+-type efaceWords struct {
+-	typ  unsafe.Pointer
+-	data unsafe.Pointer
++func (t *forceCloseTransport) track(conn net.Conn) net.Conn {
++	c := &trackedHTTP2Conn{Conn: conn, owner: t}
++	t.access.Lock()
++	if t.connections == nil {
++		t.connections = make(map[*trackedHTTP2Conn]struct{})
++	}
++	t.connections[c] = struct{}{}
++	t.access.Unlock()
++	return c
++}
++
++func (t *forceCloseTransport) reset() {
++	t.access.Lock()
++	connections := t.connections
++	t.connections = nil
++	t.access.Unlock()
++	for conn := range connections {
++		_ = conn.Close()
++	}
++}
++
++type trackedHTTP2Conn struct {
++	net.Conn
++	owner *forceCloseTransport
++}
++
++func (c *trackedHTTP2Conn) ConnectionState() tls.ConnectionState {
++	if conn, ok := c.Conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
++		return conn.ConnectionState()
++	}
++	return tls.ConnectionState{}
++}
++
++func (c *trackedHTTP2Conn) Close() error {
++	c.owner.access.Lock()
++	delete(c.owner.connections, c)
++	c.owner.access.Unlock()
++	return c.Conn.Close()
+ }
+ 
+ func ResetTransport(rawTransport http.RoundTripper) http.RoundTripper {
+@@ -27,21 +64,10 @@
+ 	case *http.Transport:
+ 		transport.CloseIdleConnections()
+ 		return transport.Clone()
+-	case *http2.Transport:
+-		connPool := transportConnPool(transport)
+-		p := (*clientConnPool)((*efaceWords)(unsafe.Pointer(&connPool)).data)
+-		p.mu.Lock()
+-		defer p.mu.Unlock()
+-		for _, vv := range p.conns {
+-			for _, cc := range vv {
+-				cc.Close()
+-			}
+-		}
++	case *forceCloseTransport:
++		transport.reset()
+ 		return transport
+ 	default:
+ 		panic(E.New("unknown transport type: ", reflect.TypeOf(transport)))
+ 	}
+ }
+-
+-//go:linkname transportConnPool golang.org/x/net/http2.(*Transport).connPool
+-func transportConnPool(t *http2.Transport) http2.ClientConnPool

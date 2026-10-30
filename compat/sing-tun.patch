@@ -1,0 +1,17 @@
+--- a/route_direct.go
++++ b/route_direct.go
+@@ -24,12 +24,12 @@
+ }
+ 
+ type DirectRouteMapping struct {
+-	mapping freelru.Cache[DirectRouteSession, DirectRouteDestination]
++	mapping *freelru.Cache[DirectRouteSession, DirectRouteDestination]
+ 	timeout time.Duration
+ }
+ 
+ func NewDirectRouteMapping(timeout time.Duration) *DirectRouteMapping {
+-	mapping := common.Must1(freelru.NewSharded[DirectRouteSession, DirectRouteDestination](1024, maphash.NewHasher[DirectRouteSession]().Hash32))
++	mapping := common.Must1(freelru.New[DirectRouteSession, DirectRouteDestination](1024, maphash.NewHasher[DirectRouteSession]().Hash32, true))
+ 	mapping.SetHealthCheck(func(session DirectRouteSession, action DirectRouteDestination) bool {
+ 		if action != nil {
+ 			return !action.IsClosed()
