@@ -1,7 +1,10 @@
 package conf
 
 type XrayConfig struct {
-	LogConfig          *XrayLogConfig        `json:"Log"`
+	LogConfig *XrayLogConfig `json:"Log"`
+	// Audit is the optional structured event outlet. Absent or disabled, the
+	// process behaves exactly as upstream v0.4.0.
+	AuditConfig        *AuditConfig          `json:"Audit,omitempty"`
 	AssetPath          string                `json:"AssetPath"`
 	DnsConfigPath      string                `json:"DnsConfigPath"`
 	RouteConfigPath    string                `json:"RouteConfigPath"`
@@ -24,8 +27,26 @@ type XrayConnectionConfig struct {
 	BufferSize   int32  `json:"bufferSize"`
 }
 
+// AuditConfig mirrors the `Audit` block of a core configuration.
+type AuditConfig struct {
+	Enabled              bool             `json:"enabled"`
+	SourceID             string           `json:"source_id"`
+	NodeIDs              []int64          `json:"node_ids"`
+	InboundNodeIDs       map[string]int64 `json:"inbound_node_ids"`
+	SocketPath           string           `json:"socket_path"`
+	CaptureMode          string           `json:"capture_mode"`
+	EmitAllowUserIDs     []int64          `json:"emit_allow_user_ids"`
+	QueueMaxEvents       int              `json:"queue_max_events"`
+	QueueMaxBytes        int              `json:"queue_max_bytes"`
+	MaxFrameBytes        int              `json:"max_frame_bytes"`
+	SocketWriteTimeoutMS int              `json:"socket_write_timeout_ms"`
+	CollectClientIP      bool             `json:"collect_client_ip"`
+	CollectPayload       bool             `json:"collect_payload"`
+}
+
 func NewXrayConfig() *XrayConfig {
 	return &XrayConfig{
+		AuditConfig: NewAuditConfig(),
 		LogConfig: &XrayLogConfig{
 			Level:      "warning",
 			AccessPath: "",
@@ -43,6 +64,20 @@ func NewXrayConfig() *XrayConfig {
 			DownlinkOnly: 4,
 			BufferSize:   64,
 		},
+	}
+}
+
+// NewAuditConfig returns the disabled default matching the documented fragment.
+func NewAuditConfig() *AuditConfig {
+	return &AuditConfig{
+		Enabled:              false,
+		CaptureMode:          "allowlist",
+		QueueMaxEvents:       1024,
+		QueueMaxBytes:        2 << 20,
+		MaxFrameBytes:        4096,
+		SocketWriteTimeoutMS: 50,
+		CollectClientIP:      false,
+		CollectPayload:       false,
 	}
 }
 

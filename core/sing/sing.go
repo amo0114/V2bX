@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
+
+	"github.com/deadloop/node-audit/adapters/v2bx/audit"
 
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/log"
@@ -25,6 +28,9 @@ type DNSConfig struct {
 }
 
 type Sing struct {
+	audit *audit.Emitter
+	// Published under users.mapLock; request readers perform one atomic load.
+	auditUsers                atomic.Pointer[map[string]int64]
 	box                       *box.Box
 	ctx                       context.Context
 	hookServer                *HookServer
@@ -83,7 +89,7 @@ func New(c *conf.CoreConfig) (vCore.Core, error) {
 		counter: sync.Map{},
 	}
 	b.Router().AppendTracker(hs)
-	return &Sing{
+	s := &Sing{
 		ctx:        b.Router().GetCtx(),
 		box:        b,
 		hookServer: hs,
@@ -93,15 +99,38 @@ func New(c *conf.CoreConfig) (vCore.Core, error) {
 			uidMap: make(map[string]int),
 		},
 		nodeReportMinTrafficBytes: make(map[string]int64),
-	}, nil
+	}
+	s.configureAudit(c.SingConfig.AuditConfig)
+	return s, nil
 }
 
 func (b *Sing) Start() error {
-	return b.box.Start()
+	// Mount before box starts accepting, and keep the emitter mounted until
+	// box shutdown completes. There is no forwarding wait on the audit socket.
+	if b.audit != nil {
+		if err := b.audit.Start(); err != nil {
+			log.Error("sing audit emitter startup failed; forwarding continues")
+		} else {
+			b.hookServer.audit.Store(b.audit)
+		}
+	}
+	if err := b.box.Start(); err != nil {
+		b.hookServer.audit.Store(nil)
+		if b.audit != nil {
+			_ = b.audit.Close()
+		}
+		return err
+	}
+	return nil
 }
 
 func (b *Sing) Close() error {
-	return b.box.Close()
+	err := b.box.Close()
+	b.hookServer.audit.Store(nil)
+	if b.audit != nil {
+		_ = b.audit.Close()
+	}
+	return err
 }
 
 func (b *Sing) Protocols() []string {

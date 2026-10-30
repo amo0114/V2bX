@@ -36,7 +36,14 @@ func (c *Xray) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo) e
 	}
 	var user string
 	c.users.mapLock.Lock()
-	defer c.users.mapLock.Unlock()
+	// Publish after the write lock is released, on every return path: a partial
+	// delete still changes which identities exist.
+	defer func() {
+		snap := c.snapshotLocked()
+		gen := c.nextAuditGen()
+		c.users.mapLock.Unlock()
+		c.publishAuditSnapshot(snap, gen)
+	}()
 	for i := range users {
 		user = format.UserTag(tag, users[i].Uuid)
 		err = userManager.RemoveUser(context.Background(), user)
@@ -95,10 +102,20 @@ func (x *Xray) GetUserTrafficSlice(tag string, reset bool) ([]panel.UserTraffic,
 
 func (c *Xray) AddUsers(p *vCore.AddUsersParams) (added int, err error) {
 	c.users.mapLock.Lock()
-	defer c.users.mapLock.Unlock()
-	for i := range p.Users {
-		c.users.uidMap[format.UserTag(p.Tag, p.Users[i].Uuid)] = p.Users[i].Id
-	}
+	// Publish after the write lock is released, on every return path. The real
+	// start-up order is "start core, then add users", so without publishing here
+	// the audit resolver would see an empty snapshot for the whole run and every
+	// authenticated user would be reported as unknown.
+	defer func() {
+		snap := c.snapshotLocked()
+		gen := c.nextAuditGen()
+		c.users.mapLock.Unlock()
+		c.publishAuditSnapshot(snap, gen)
+	}()
+	// Validate everything that can fail BEFORE mutating the identity map, and
+	// only record a user once its addition actually succeeded. The map is what the
+	// audit resolver reads, so publishing an intent that failed would attribute
+	// traffic to a user that was never added.
 	var users []*protocol.User
 	switch p.NodeInfo.Type {
 	case "vmess":
@@ -119,15 +136,18 @@ func (c *Xray) AddUsers(p *vCore.AddUsersParams) (added int, err error) {
 	if err != nil {
 		return 0, fmt.Errorf("get user manager error: %s", err)
 	}
-	for _, u := range users {
+	added = 0
+	for i, u := range users {
 		mUser, err := u.ToMemoryUser()
 		if err != nil {
-			return 0, err
+			return added, err
 		}
-		err = man.AddUser(context.Background(), mUser)
-		if err != nil {
-			return 0, err
+		if err := man.AddUser(context.Background(), mUser); err != nil {
+			return added, err
 		}
+		// Record the identity only after the user manager accepted it.
+		c.users.uidMap[format.UserTag(p.Tag, p.Users[i].Uuid)] = p.Users[i].Id
+		added++
 	}
-	return len(users), nil
+	return added, nil
 }

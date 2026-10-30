@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/InazumaV/V2bX/common/counter"
 	"github.com/InazumaV/V2bX/common/rate"
 	"github.com/InazumaV/V2bX/limiter"
+	"github.com/deadloop/node-audit/adapters/v2bx/audit"
 
 	"github.com/xtls/xray-core/app/dispatcher"
 	"github.com/xtls/xray-core/common"
@@ -108,6 +110,68 @@ type DefaultDispatcher struct {
 	fdns         dns.FakeDNSEngine
 	Counter      sync.Map
 	LinkManagers sync.Map // map[string]*LinkManager
+	// audit is the optional per-instance observation point. It is nil unless the
+	// xray core explicitly attaches a configured emitter, so an unpatched config
+	// behaves exactly as upstream.
+	//
+	// It is an atomic pointer because it is attached after the core has started
+	// and detached during shutdown, while dispatch goroutines are live: a plain
+	// field would be a data race between SetAuditEmitter and every request.
+	audit atomic.Pointer[audit.Emitter]
+}
+
+// SetAuditEmitter attaches (or detaches, with nil) the audit observation point.
+// Kept per instance on purpose: a global hook would let one core's emitter
+// capture or clobber another core's events in a multi-core process.
+//
+// Detaching only stops *new* observations from finding the emitter. A request
+// that already loaded it may still enqueue once; Emitter.Close is written to
+// make that case a counted drop rather than a send to a dead worker.
+func (d *DefaultDispatcher) SetAuditEmitter(e *audit.Emitter) {
+	d.audit.Store(e)
+}
+
+// observeAccepted emits one proxy_accepted observation. It never blocks, never
+// returns an error and never influences forwarding.
+func (d *DefaultDispatcher) observeAccepted(ctx context.Context, destination net.Destination) {
+	// Load once: the emitter must not be re-read between the nil check and use.
+	em := d.audit.Load()
+	if em == nil {
+		return
+	}
+	inbound := session.InboundFromContext(ctx)
+	if inbound == nil {
+		return
+	}
+	email := ""
+	if inbound.User != nil {
+		email = inbound.User.Email
+	}
+	domain, ip := "", ""
+	if destination.Address.Family().IsDomain() {
+		domain = destination.Address.Domain()
+	} else {
+		ip = destination.Address.IP().String()
+	}
+	em.ObserveAccept(email, inbound.Tag, destination.Network.SystemString(), domain, ip, int32(destination.Port))
+}
+
+// observeRejected emits one proxy_rejected observation for a policy rejection.
+// A pre-authentication failure has no user to attribute and is not emitted.
+func (d *DefaultDispatcher) observeRejected(ctx context.Context) {
+	em := d.audit.Load()
+	if em == nil {
+		return
+	}
+	inbound := session.InboundFromContext(ctx)
+	if inbound == nil || inbound.User == nil || inbound.User.Email == "" {
+		return
+	}
+	network := "tcp"
+	if inbound.Source.Network == net.Network_UDP {
+		network = "udp"
+	}
+	em.ObserveReject(inbound.User.Email, inbound.Tag, network, "policy_rejected")
 }
 
 func init() {
@@ -186,6 +250,7 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			network == net.Network_TCP,
 			sessionInbound.Source.Network == net.Network_TCP)
 		if reject {
+			d.observeRejected(ctx)
 			errors.LogInfo(ctx, "Limited ", user.Email, " by conn or ip")
 			common.Close(outboundLink.Writer)
 			common.Close(inboundLink.Writer)
@@ -292,8 +357,18 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 	sniffingRequest := content.SniffingRequest
 	inbound, outbound, l, err := d.getLink(ctx, destination.Network)
 	if err != nil {
+		// getLink applies the connection/device/rate policy and may have emitted
+		// its own proxy_rejected observation. Nothing is reported as accepted.
 		return nil, err
 	}
+	// Audit observation point: authentication and the current proxy policy check
+	// have both passed, and the destination is known. It stays BEFORE the actual
+	// dial, so the stage is "accepted", never "connected".
+	//
+	// This used to run before getLink, which made one physically rejected request
+	// produce two observations (an accepted flow plus a rejected flow) and inflate
+	// the request count.
+	d.observeAccepted(ctx, destination)
 	if !sniffingRequest.Enabled {
 		go d.routedDispatch(ctx, outbound, destination, l, "")
 	} else {
@@ -371,6 +446,10 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			destination.Network == net.Network_TCP,
 			sessionInbound.Source.Network == net.Network_TCP)
 		if reject {
+			// Audit: the same policy rejection as the Dispatch path. Without this,
+			// a VLESS connection refused by the device/rate limit produced no audit
+			// record at all.
+			d.observeRejected(ctx)
 			errors.LogInfo(ctx, "Limited ", user.Email, " by conn or ip")
 			common.Close(outbound.Writer)
 			common.Interrupt(outbound.Reader)
@@ -414,6 +493,11 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			Writer:  outbound.Writer,
 		}
 	}
+
+	// Audit observation point for the DispatchLink path: authentication and the
+	// proxy policy check have both passed, and the destination is known. Still
+	// BEFORE any dial, so the stage is "accepted", never "connected".
+	d.observeAccepted(ctx, destination)
 
 	sniffingRequest := content.SniffingRequest
 	if !sniffingRequest.Enabled {

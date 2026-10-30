@@ -417,6 +417,10 @@ func (b *Sing) AddNode(tag string, info *panel.NodeInfo, config *conf.Options) e
 }
 
 func (b *Sing) DelNode(tag string) error {
+	b.users.mapLock.Lock()
+	defer b.users.mapLock.Unlock()
+	// A failed removal is ambiguous; fail closed for this inbound only.
+	b.forgetAuditInboundLocked(tag)
 	in := b.box.Inbound()
 	err := in.Remove(tag)
 	if err != nil {

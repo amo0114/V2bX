@@ -5,6 +5,7 @@ import (
 )
 
 type SingConfig struct {
+	AuditConfig  *AuditConfig  `json:"Audit,omitempty"`
 	LogConfig    SingLogConfig `json:"Log"`
 	NtpConfig    SingNtpConfig `json:"NTP"`
 	OriginalPath string        `json:"OriginalPath"`
@@ -19,6 +20,7 @@ type SingLogConfig struct {
 
 func NewSingConfig() *SingConfig {
 	return &SingConfig{
+		AuditConfig: NewAuditConfig(),
 		LogConfig: SingLogConfig{
 			Level:     "error",
 			Timestamp: true,

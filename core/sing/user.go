@@ -19,12 +19,20 @@ import (
 )
 
 func (b *Sing) AddUsers(p *core.AddUsersParams) (added int, err error) {
+	b.users.mapLock.Lock()
+	defer b.users.mapLock.Unlock()
+	// Invalidate before a possibly partial upstream update. Never publish guessed
+	// identities from the existing billing map.
+	b.updateAuditUsersLocked(p.Tag, p.Users, false)
+	defer func() {
+		if err == nil && added == len(p.Users) && auditProtocol(p.NodeInfo.Type) {
+			b.updateAuditUsersLocked(p.Tag, p.Users, true)
+		}
+	}()
 	in, found := b.box.Inbound().Get(p.Tag)
 	if !found {
 		return 0, errors.New("the inbound not found")
 	}
-	b.users.mapLock.Lock()
-	defer b.users.mapLock.Unlock()
 	for i := range p.Users {
 		b.users.uidMap[p.Users[i].Uuid] = p.Users[i].Id
 	}
@@ -176,6 +184,9 @@ type UserDeleter interface {
 }
 
 func (b *Sing) DelUsers(users []panel.UserInfo, tag string, info *panel.NodeInfo) error {
+	b.users.mapLock.Lock()
+	defer b.users.mapLock.Unlock()
+	b.updateAuditUsersLocked(tag, users, false)
 	var del UserDeleter
 	if i, found := b.box.Inbound().Get(tag); found {
 		switch info.Type {
@@ -200,8 +211,6 @@ func (b *Sing) DelUsers(users []panel.UserInfo, tag string, info *panel.NodeInfo
 		return errors.New("the inbound not found")
 	}
 	uuids := make([]string, len(users))
-	b.users.mapLock.Lock()
-	defer b.users.mapLock.Unlock()
 	for i := range users {
 		if v, ok := b.hookServer.counter.Load(tag); ok {
 			c := v.(*counter.TrafficCounter)

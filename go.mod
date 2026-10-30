@@ -6,6 +6,7 @@ require (
 	github.com/apernet/hysteria/core/v2 v2.12.0
 	github.com/apernet/hysteria/extras/v2 v2.12.0
 	github.com/beevik/ntp v1.4.4-0.20240716062501-06ef196b89ec
+	github.com/deadloop/node-audit/adapters/v2bx/audit v0.0.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-acme/lego/v4 v4.25.2
 	github.com/go-resty/resty/v2 v2.16.5
@@ -340,3 +341,5 @@ replace github.com/sagernet/sing-box v1.13.0 => ./compat/sing-box
 replace github.com/xtls/xray-core v1.251202.0 => github.com/wyx2685/xray-core v0.0.0-20260930151924-e087e74a1bf2
 
 replace github.com/sagernet/sing-tun => ./compat/sing-tun
+
+replace github.com/deadloop/node-audit/adapters/v2bx/audit => ./compat/node-audit

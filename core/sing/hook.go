@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
+
+	"github.com/deadloop/node-audit/adapters/v2bx/audit"
 
 	"github.com/InazumaV/V2bX/common/format"
 	"github.com/InazumaV/V2bX/common/rate"
@@ -20,6 +23,7 @@ import (
 var _ adapter.ConnectionTracker = (*HookServer)(nil)
 
 type HookServer struct {
+	audit   atomic.Pointer[audit.Emitter]
 	counter sync.Map //map[string]*counter.TrafficCounter
 }
 
@@ -36,6 +40,7 @@ func (h *HookServer) RoutedConnection(_ context.Context, conn net.Conn, m adapte
 	taguuid := format.UserTag(m.Inbound, m.User)
 	ip := m.Source.Addr.String()
 	if b, r := l.CheckLimit(taguuid, ip, true, true); r {
+		h.observeAudit(m, "tcp", true)
 		conn.Close()
 		log.Error("[", m.Inbound, "] ", "Limited ", m.User, " by ip or conn")
 		return conn
@@ -50,6 +55,7 @@ func (h *HookServer) RoutedConnection(_ context.Context, conn net.Conn, m adapte
 				"User %s access domain %s reject by rule",
 				m.User,
 				destStr))
+			h.observeAudit(m, "tcp", true)
 			conn.Close()
 			return conn
 		}
@@ -59,11 +65,13 @@ func (h *HookServer) RoutedConnection(_ context.Context, conn net.Conn, m adapte
 					"User %s access protocol %s reject by rule",
 					m.User,
 					protocol))
+				h.observeAudit(m, "tcp", true)
 				conn.Close()
 				return conn
 			}
 		}
 	}
+	h.observeAudit(m, "tcp", false)
 	var t *counter.TrafficCounter
 	if c, ok := h.counter.Load(m.Inbound); !ok {
 		t = counter.NewTrafficCounter()
@@ -84,6 +92,7 @@ func (h *HookServer) RoutedPacketConnection(_ context.Context, conn N.PacketConn
 	ip := m.Source.Addr.String()
 	taguuid := format.UserTag(m.Inbound, m.User)
 	if b, r := l.CheckLimit(taguuid, ip, false, false); r {
+		h.observeAudit(m, "udp", true)
 		conn.Close()
 		log.Error("[", m.Inbound, "] ", "Limited ", m.User, " by ip or conn")
 		return conn
@@ -98,6 +107,7 @@ func (h *HookServer) RoutedPacketConnection(_ context.Context, conn N.PacketConn
 				"User %s access domain %s reject by rule",
 				m.User,
 				destStr))
+			h.observeAudit(m, "udp", true)
 			conn.Close()
 			return conn
 		}
@@ -107,11 +117,13 @@ func (h *HookServer) RoutedPacketConnection(_ context.Context, conn N.PacketConn
 					"User %s access protocol %s reject by rule",
 					m.User,
 					protocol))
+				h.observeAudit(m, "udp", true)
 				conn.Close()
 				return conn
 			}
 		}
 	}
+	h.observeAudit(m, "udp", false)
 	var t *counter.TrafficCounter
 	if c, ok := h.counter.Load(m.Inbound); !ok {
 		t = counter.NewTrafficCounter()
